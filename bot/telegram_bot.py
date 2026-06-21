@@ -26,22 +26,29 @@ def build_keyboard(cond: Condition) -> InlineKeyboardMarkup:
     ]])
 
 
+def _condition_label(cond: Condition) -> str:
+    pair = f"{cond.pair[0]}−{cond.pair[1]}"
+    direction = ">" if cond.direction == "above" else "<"
+    return f"{cond.alert_emoji} {pair} {direction} {cond.threshold}"
+
+
 def build_message(
-    cond: Condition,
     paxg_mark: Decimal,
     xaut_mark: Decimal,
     xau_mark: Decimal,
     spread_paxg_xaut: Decimal,
     spread_xau_xaut: Decimal,
     stale: bool,
+    triggered: "Condition | None" = None,
 ) -> str:
     stale_banner = "⚠️ *STALE QUOTE DATA*\n\n" if stale else ""
-    direction = ">" if cond.direction == "above" else "<"
-    label = cond.key.replace("_", " ")
+    footer = (
+        f"\n\n*Triggered:* {_condition_label(triggered)}"
+        if triggered
+        else "\n\n_No Actionable Trade_"
+    )
     return (
         f"{stale_banner}"
-        f"{cond.alert_emoji} *{label}*\n"
-        f"Spread {direction} {cond.threshold}\n\n"
         f"*Prices*\n"
         f"PAXG: `{paxg_mark}`\n"
         f"XAUT: `{xaut_mark}`\n"
@@ -49,7 +56,19 @@ def build_message(
         f"*Spreads*\n"
         f"PAXG − XAUT: `{spread_paxg_xaut}`\n"
         f"XAU  − XAUT: `{spread_xau_xaut}`"
+        f"{footer}"
     )
+
+
+def check_conditions(spread_map: dict) -> "Condition | None":
+    """Return the first condition whose threshold is currently breached, ignoring hysteresis."""
+    for cond in CONDITIONS:
+        value = spread_map[cond.pair]
+        if cond.direction == "above" and value > cond.threshold:
+            return cond
+        if cond.direction == "below" and value < cond.threshold:
+            return cond
+    return None
 
 
 async def poll_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -105,10 +124,10 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         if should_fire:
             cs["last_fired"] = datetime.now(timezone.utc).isoformat()
             text = build_message(
-                cond,
                 paxg.mark, xaut.mark, xau_mark,
                 spread_paxg_xaut, spread_xau_xaut,
                 stale,
+                triggered=cond,
             )
             kb = build_keyboard(cond)
             for chat_id in chat_ids:
@@ -174,24 +193,24 @@ async def poll_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     stale = is_stale(paxg, config.MAX_QUOTE_AGE_S) or is_stale(xaut, config.MAX_QUOTE_AGE_S)
-    stale_banner = "⚠️ *STALE QUOTE DATA*\n\n" if stale else ""
-
     xau_listing = Listing(ticker="XAU", mark=xau_mark, bid_1k=None, ask_1k=None, updated_at=None)
     spread_paxg_xaut = mark_spread(paxg, xaut)
     spread_xau_xaut  = mark_spread(xau_listing, xaut)
 
-    text = (
-        f"{stale_banner}"
-        f"📊 *Current Prices & Spreads*\n\n"
-        f"*Prices*\n"
-        f"PAXG: `{paxg.mark}`\n"
-        f"XAUT: `{xaut.mark}`\n"
-        f"XAU:  `{xau_mark}`\n\n"
-        f"*Spreads*\n"
-        f"PAXG − XAUT: `{spread_paxg_xaut}`\n"
-        f"XAU  − XAUT: `{spread_xau_xaut}`"
+    spread_map = {
+        ("PAXG", "XAUT"): spread_paxg_xaut,
+        ("XAU",  "XAUT"): spread_xau_xaut,
+    }
+    triggered = check_conditions(spread_map)
+
+    text = build_message(
+        paxg.mark, xaut.mark, xau_mark,
+        spread_paxg_xaut, spread_xau_xaut,
+        stale,
+        triggered=triggered,
     )
-    await query.message.reply_text(text, parse_mode="Markdown", reply_markup=_start_keyboard())
+    kb = build_keyboard(triggered) if triggered else None
+    await query.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
 
 
 def build_app(initial_state: dict, initial_chat_ids: list) -> Application:
