@@ -24,7 +24,7 @@ async def startup_check() -> None:
 def main() -> None:
     asyncio.get_event_loop().run_until_complete(startup_check())
     loaded_state = state_module.load()
-    chat_ids = list(config.CHAT_IDS)
+    chat_ids = state_module.load_chat_ids(config.CHAT_IDS)
     app = build_app(initial_state=loaded_state, initial_chat_ids=chat_ids)
     app.run_polling(drop_pending_updates=True)
 

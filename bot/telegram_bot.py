@@ -120,7 +120,7 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE) -> None:
                 except Exception as e:
                     logger.error(f"Failed to send to {chat_id}: {e}")
 
-    state_module.save(app_state)
+    state_module.save_chat_ids(app_state, chat_ids)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -129,6 +129,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat_id not in chat_ids:
         chat_ids.append(chat_id)
         logger.info(f"New subscriber: {chat_id}")
+        state_module.save_chat_ids(context.bot_data["state"], chat_ids)
     await update.message.reply_text(
         f"✅ *Variational Spread Bot active*\n\n"
         f"Polling every `{config.POLL_SECONDS}s` ({config.POLL_SECONDS // 60} min)\n\n"

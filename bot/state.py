@@ -20,6 +20,23 @@ def save(state: dict) -> None:
         json.dump(state, f, indent=2)
 
 
+def load_chat_ids(seed_ids: list[int]) -> list[int]:
+    """Load persisted chat IDs, merging with any seed IDs from .env."""
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            data = json.load(f)
+        persisted = data.get("chat_ids", [])
+        merged = list({*seed_ids, *persisted})
+        return merged
+    return list(seed_ids)
+
+
+def save_chat_ids(state: dict, chat_ids: list[int]) -> None:
+    """Persist chat IDs inside state.json alongside hysteresis state."""
+    state["chat_ids"] = chat_ids
+    save(state)
+
+
 def is_cooled_down(state: dict, key: str, cooldown_s: int) -> bool:
     last = state[key].get("last_fired")
     if last is None:
