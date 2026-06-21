@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from bot import config
 from bot import state as state_module
@@ -15,6 +15,8 @@ from bot.variational import Listing, fetch_listings, is_stale
 logger = logging.getLogger(__name__)
 
 REF_URL = "https://omni.variational.io/?ref=OMNIA5"
+POLL_BUTTON_COOLDOWN_S = 10
+_poll_button_last_used: dict[int, float] = {}  # chat_id → timestamp
 
 
 def build_keyboard(cond: Condition) -> InlineKeyboardMarkup:
@@ -123,6 +125,12 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     state_module.save_chat_ids(app_state, chat_ids)
 
 
+def _start_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Poll now", callback_data="poll_now"),
+    ]])
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id  = update.effective_chat.id
     chat_ids = context.bot_data["chat_ids"]
@@ -138,7 +146,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"XAU−XAUT  › `{config.XAU_XAUT_HIGH}` or ‹ `{config.XAU_XAUT_LOW}`\n\n"
         f"Chat ID: `{chat_id}`",
         parse_mode="Markdown",
+        reply_markup=_start_keyboard(),
     )
+
+
+async def poll_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    chat_id = query.message.chat_id
+    now = datetime.now(timezone.utc).timestamp()
+
+    last_used = _poll_button_last_used.get(chat_id, 0)
+    remaining = POLL_BUTTON_COOLDOWN_S - (now - last_used)
+    if remaining > 0:
+        await query.answer(f"⏳ Wait {remaining:.0f}s before polling again.", show_alert=False)
+        return
+
+    _poll_button_last_used[chat_id] = now
+    await query.answer("Polling…")
+
+    try:
+        listings = await fetch_listings()
+        paxg = listings[config.TICKER_MAP["PAXG"]]
+        xaut = listings[config.TICKER_MAP["XAUT"]]
+        xau_mark = await get_xau_price(listings)
+    except Exception as e:
+        await query.message.reply_text(f"❌ Poll failed: {e}")
+        return
+
+    stale = is_stale(paxg, config.MAX_QUOTE_AGE_S) or is_stale(xaut, config.MAX_QUOTE_AGE_S)
+    stale_banner = "⚠️ *STALE QUOTE DATA*\n\n" if stale else ""
+
+    xau_listing = Listing(ticker="XAU", mark=xau_mark, bid_1k=None, ask_1k=None, updated_at=None)
+    spread_paxg_xaut = mark_spread(paxg, xaut)
+    spread_xau_xaut  = mark_spread(xau_listing, xaut)
+
+    text = (
+        f"{stale_banner}"
+        f"📊 *Current Prices & Spreads*\n\n"
+        f"*Prices*\n"
+        f"PAXG: `{paxg.mark}`\n"
+        f"XAUT: `{xaut.mark}`\n"
+        f"XAU:  `{xau_mark}`\n\n"
+        f"*Spreads*\n"
+        f"PAXG − XAUT: `{spread_paxg_xaut}`\n"
+        f"XAU  − XAUT: `{spread_xau_xaut}`"
+    )
+    await query.message.reply_text(text, parse_mode="Markdown", reply_markup=_start_keyboard())
 
 
 def build_app(initial_state: dict, initial_chat_ids: list) -> Application:
@@ -146,5 +199,6 @@ def build_app(initial_state: dict, initial_chat_ids: list) -> Application:
     app.bot_data["state"]    = initial_state
     app.bot_data["chat_ids"] = initial_chat_ids
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(poll_button_callback, pattern="^poll_now$"))
     app.job_queue.run_repeating(poll_job, interval=config.POLL_SECONDS, first=5)
     return app
