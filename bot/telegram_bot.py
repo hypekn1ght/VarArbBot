@@ -19,11 +19,14 @@ POLL_BUTTON_COOLDOWN_S = 10
 _poll_button_last_used: dict[int, float] = {}  # chat_id → timestamp
 
 
-def build_keyboard(cond: Condition) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"Short {cond.short_leg}", url=REF_URL),
-        InlineKeyboardButton(f"Long {cond.long_leg}",  url=REF_URL),
-    ]])
+def build_keyboard(cond: "Condition | None" = None) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("🔄 Poll now", callback_data="poll_now")]]
+    if cond:
+        rows.append([
+            InlineKeyboardButton(f"Short {cond.short_leg}", url=REF_URL),
+            InlineKeyboardButton(f"Long {cond.long_leg}",  url=REF_URL),
+        ])
+    return InlineKeyboardMarkup(rows)
 
 
 def _condition_label(cond: Condition) -> str:
@@ -129,7 +132,7 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE) -> None:
                 stale,
                 triggered=cond,
             )
-            kb = build_keyboard(cond)
+            kb = build_keyboard(cond=cond)
             for chat_id in chat_ids:
                 try:
                     await bot.send_message(
@@ -209,7 +212,7 @@ async def poll_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         stale,
         triggered=triggered,
     )
-    kb = build_keyboard(triggered) if triggered else None
+    kb = build_keyboard(cond=triggered)
     await query.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
 
 
